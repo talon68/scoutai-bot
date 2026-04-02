@@ -1,4 +1,5 @@
 import os
+import json
 import aiohttp
 from datetime import datetime, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -6,19 +7,37 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 FOOTBALL_KEY = os.environ.get("FOOTBALL_KEY", "")
+GROQ_KEY = os.environ.get("GROQ_KEY", "")
 
 async def get_matches(status=""):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if status:
-        url = f"https://api.football-data.org/v4/matches?status={status}"
-    else:
-        url = f"https://api.football-data.org/v4/matches?dateFrom={today}&dateTo={today}"
+    url = f"https://api.football-data.org/v4/matches?status={status}" if status else f"https://api.football-data.org/v4/matches?dateFrom={today}&dateTo={today}"
     async with aiohttp.ClientSession() as s:
         async with s.get(url, headers={"X-Auth-Token": FOOTBALL_KEY}) as r:
             if r.status != 200:
                 return []
             d = await r.json()
             return d.get("matches", [])
+
+async def groq_analiz(home, away, league=""):
+    prompt = f"""Futbol mac analisti olarak su maci analiz et:
+Mac: {home} vs {away}
+Lig: {league or 'Bilinmiyor'}
+
+SADECE JSON don:
+{{"ozet":"2 cumle analiz","surpriz":30,"iy_ms":[{{"t":"1/1","o":"38%"}},{{"t":"X/1","o":"18%"}},{{"t":"1/2","o":"14%"}},{{"t":"X/X","o":"16%"}},{{"t":"2/2","o":"14%"}}],"iy_ms_yorum":"en guclu tahmin","gol_ust":45,"gol_yorum":"gol beklentisi"}}"""
+
+    async with aiohttp.ClientSession() as s:
+        async with s.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
+            json={"model": "llama3-8b-8192", "max_tokens": 500,
+                  "messages": [{"role": "user", "content": prompt}]}
+        ) as r:
+            d = await r.json()
+            text = d["choices"][0]["message"]["content"]
+            clean = text.replace("json", "").replace("", "").strip()
+            return json.loads(clean)
 
 def fmt_score(m):
     ft = m.get("score", {}).get("fullTime", {})
@@ -38,10 +57,8 @@ def fmt_status(m):
         return "?"
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    kb = [
-        [InlineKeyboardButton("Canli Maclar", callback_data="live"),
-         InlineKeyboardButton("Bugun", callback_data="today")],
-    ]
+    kb = [[InlineKeyboardButton("Canli Maclar", callback_data="live"),
+           InlineKeyboardButton("Bugun", callback_data="today")]]
     await update.message.reply_text(
         "ScoutAI Mac Analiz Botu\n\n/canli - Canli maclar\n/bugun - Bugunku program\n/analiz Galatasaray Fenerbahce",
         reply_markup=InlineKeyboardMarkup(kb)
@@ -60,10 +77,7 @@ async def canli(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         away = m["awayTeam"].get("shortName") or m["awayTeam"]["name"]
         score = fmt_score(m)
         text += f"{home} {score} {away}\n"
-        buttons.append([InlineKeyboardButton(
-            f"Analiz: {home} vs {away}",
-            callback_data=f"a_{home[:12]}_{away[:12]}"
-        )])
+        buttons.append([InlineKeyboardButton(f"Analiz: {home} vs {away}", callback_data=f"a_{home[:12]}_{away[:12]}")])
     buttons.append([InlineKeyboardButton("Yenile", callback_data="live")])
     await msg.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -81,10 +95,7 @@ async def bugun(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         score = fmt_score(m)
         status = fmt_status(m)
         text += f"{status} {home} {score} {away}\n"
-        buttons.append([InlineKeyboardButton(
-            f"Analiz: {home} vs {away}",
-            callback_data=f"a_{home[:12]}_{away[:12]}"
-        )])
+        buttons.append([InlineKeyboardButton(f"Analiz: {home} vs {away}", callback_data=f"a_{home[:12]}_{away[:12]}")])
     buttons.append([InlineKeyboardButton("Yenile", callback_data="today")])
     await msg.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -94,76 +105,17 @@ async def analiz(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Kullanim: /analiz EvSahibi Deplasman\nOrnek: /analiz Galatasaray Fenerbahce")
         return
     home, away = args[0], args[1]
-    msg = await update.message.reply_text(f"Analiz ediliyor: {home} vs {away}...")
-    await do_analiz(msg, home, away)
+    league = " ".join(args[2:]) if len(args) > 2 else ""
+    msg = await update.message.reply_text(f"AI analiz ediliyor: {home} vs {away}...")
+    await do_analiz(msg, home, away, league)
 
 async def do_analiz(msg, home, away, league=""):
-    text = (
-        f"MAC ANALIZI\n"
-        f"{home} vs {away}\n\n"
-        f"Tahmin Guveni: 72%\n"
-        f"Surpriz Ihtimali: 28%\n\n"
-        f"IY/MS Tablosu:\n"
-        f"1/1  40%\n"
-        f"X/1  20%\n"
-        f"1/2  15%\n"
-        f"X/X  15%\n"
-        f"2/2  10%\n\n"
-        f"Gol Beklentisi: 2.6\n"
-        f"+6 Gol / Ust: 48%"
-    )
-    await msg.edit_text(text)
-
-async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = q.data
-    if data == "live":
-        matches = await get_matches("IN_PLAY")
-        if not matches:
-            await q.edit_message_text("Su an canli mac yok.")
-            return
-        text = "CANLI MACLAR\n\n"
-        buttons = []
-        for m in matches[:10]:
-            home = m["homeTeam"].get("shortName") or m["homeTeam"]["name"]
-            away = m["awayTeam"].get("shortName") or m["awayTeam"]["name"]
-            score = fmt_score(m)
-            text += f"{home} {score} {away}\n"
-            buttons.append([InlineKeyboardButton(f"Analiz: {home} vs {away}", callback_data=f"a_{home[:12]}_{away[:12]}")])
-        buttons.append([InlineKeyboardButton("Yenile", callback_data="live")])
-        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-    elif data == "today":
-        matches = await get_matches()
-        if not matches:
-            await q.edit_message_text("Bugun mac bulunamadi.")
-            return
-        text = f"BUGUN\n\n"
-        buttons = []
-        for m in matches[:20]:
-            home = m["homeTeam"].get("shortName") or m["homeTeam"]["name"]
-            away = m["awayTeam"].get("shortName") or m["awayTeam"]["name"]
-            score = fmt_score(m)
-            status = fmt_status(m)
-            text += f"{status} {home} {score} {away}\n"
-            buttons.append([InlineKeyboardButton(f"Analiz: {home} vs {away}", callback_data=f"a_{home[:12]}_{away[:12]}")])
-        buttons.append([InlineKeyboardButton("Yenile", callback_data="today")])
-        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-    elif data.startswith("a_"):
-        parts = data.split("_")
-        home = parts[1] if len(parts) > 1 else "Ev"
-        away = parts[2] if len(parts) > 2 else "Dep"
-        await q.edit_message_text(f"Analiz ediliyor...")
-        await do_analiz(q.message, home, away)
-
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("canli", canli))
-    app.add_handler(CommandHandler("bugun", bugun))
-    app.add_handler(CommandHandler("analiz", analiz))
-    app.add_handler(CallbackQueryHandler(callback))
-    print("Bot baslatildi!")
-    app.run_polling()
-
-main()
+    try:
+        r = await groq_analiz(home, away, league)
+        iyms = "\n".join([f"{i['t']}  {i['o']}" for i in r.get("iy_ms", [])])
+        text = (
+            f"MAC ANALIZI (AI)\n"
+            f"{home} vs {away}\n\n"
+            f"{r.get('ozet', '')}\n\n"
+            f"Surpriz Ihtimali: {r.get('surpriz', 0)}%\n\n"
+            f"IY/MS Tablosu:\n{iyms}\
