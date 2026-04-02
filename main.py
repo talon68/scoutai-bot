@@ -118,4 +118,4 @@ async def do_analiz(msg, home, away, league=""):
             f"{home} vs {away}\n\n"
             f"{r.get('ozet', '')}\n\n"
             f"Surpriz Ihtimali: {r.get('surpriz', 0)}%\n\n"
-            f"IY/MS Tablosu:\n{iyms}\
+            f"IY/MS Tablosu:\n{iyms}\n"
