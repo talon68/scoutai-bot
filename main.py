@@ -212,5 +212,5 @@ def main():
     print("🚀 ScoutAI Bot çalışıyor!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
-if _name_ == "_main_":
+if __name__ == "_main_":
     main()
