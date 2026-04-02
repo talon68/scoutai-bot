@@ -22,22 +22,26 @@ async def get_matches(status=""):
             d = await r.json()
             return d.get("matches", [])
 
-async def groq_analiz(home, away, league=""):
-    prompt = "Futbol analisti olarak analiz et. Mac: " + home + " vs " + away + ". Lig: " + (league or "Bilinmiyor") + ". SADECE JSON don, baska hicbir sey yazma: {\"ozet\":\"2 cumle analiz\",\"surpriz\":30,\"iy_ms\":[{\"t\":\"1/1\",\"o\":\"38%\"},{\"t\":\"X/1\",\"o\":\"18%\"},{\"t\":\"1/2\",\"o\":\"14%\"},{\"t\":\"X/X\",\"o\":\"16%\"},{\"t\":\"2/2\",\"o\":\"14%\"}],\"iy_ms_yorum\":\"en guclu tahmin\",\"gol_ust\":45,\"gol_yorum\":\"gol beklentisi\"}"
+async def groq_analiz(home, away):
+    prompt = "Sen futbol analisti bir yapay zekasın. " + home + " vs " + away + " macini analiz et. Sadece su formatta JSON don, baska hicbir sey yazma: {\"ozet\":\"analiz metni\",\"surpriz\":30,\"iy_ms\":[{\"t\":\"1/1\",\"o\":\"38%\"},{\"t\":\"X/1\",\"o\":\"18%\"},{\"t\":\"1/2\",\"o\":\"14%\"},{\"t\":\"X/X\",\"o\":\"16%\"},{\"t\":\"2/2\",\"o\":\"14%\"}],\"iy_ms_yorum\":\"tahmin aciklamasi\",\"gol_ust\":45,\"gol_yorum\":\"gol analizi\"}"
+    headers = {
+        "Authorization": "Bearer " + GROQ_KEY,
+        "Content-Type": "application/json"
+    }
+    body = {
+        "model": "llama3-8b-8192",
+        "max_tokens": 600,
+        "messages": [{"role": "user", "content": prompt}]
+    }
     async with aiohttp.ClientSession() as s:
-        async with s.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": "Bearer " + GROQ_KEY, "Content-Type": "application/json"},
-            json={
-                "model": "llama3-8b-8192",
-                "max_tokens": 500,
-                "messages": [{"role": "user", "content": prompt}]
-            }
-        ) as r:
+        async with s.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body) as r:
             d = await r.json()
-            text = d["choices"][0]["message"]["content"]
-            text = text.replace("json", "").replace("", "").strip()
-            return json.loads(text)
+            content = d["choices"][0]["message"]["content"]
+            content = content.replace("json", "").replace("", "").strip()
+            start = content.find("{")
+            end = content.rfind("}") + 1
+            content = content[start:end]
+            return json.loads(content)
 
 def fmt_score(m):
     ft = m.get("score", {}).get("fullTime", {})
@@ -114,15 +118,12 @@ async def analiz(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     home = args[0]
     away = args[1]
-    league = ""
-    if len(args) > 2:
-        league = " ".join(args[2:])
     msg = await update.message.reply_text("AI analiz ediliyor: " + home + " vs " + away + "...")
-    await do_analiz(msg, home, away, league)
+    await do_analiz(msg, home, away)
 
-async def do_analiz(msg, home, away, league=""):
+async def do_analiz(msg, home, away):
     try:
-        r = await groq_analiz(home, away, league)
+        r = await groq_analiz(home, away)
         iyms = ""
         for i in r.get("iy_ms", []):
             iyms += i["t"] + "  " + i["o"] + "\n"
@@ -130,16 +131,17 @@ async def do_analiz(msg, home, away, league=""):
         text += home + " vs " + away + "\n\n"
         text += r.get("ozet", "") + "\n\n"
         text += "Surpriz Ihtimali: " + str(r.get("surpriz", 0)) + "%\n\n"
-        text += "IY/MS Tablosu:\n" + iyms
+        text += "IY/MS Tablosu:\n" + iyms + "\n"
         text += r.get("iy_ms_yorum", "") + "\n\n"
         text += "+6 Gol / Ust: " + str(r.get("gol_ust", 0)) + "%\n"
         text += r.get("gol_yorum", "")
-    except Exception:
+    except Exception as err:
         text = "MAC ANALIZI\n"
         text += home + " vs " + away + "\n\n"
         text += "Surpriz Ihtimali: 28%\n\n"
         text += "IY/MS:\n1/1  40%\nX/1  20%\n1/2  15%\nX/X  15%\n2/2  10%\n\n"
-        text += "+6 Gol / Ust: 48%"
+        text += "+6 Gol / Ust: 48%\n\n"
+        text += "[Hata: " + str(err)[:100] + "]"
     await msg.edit_text(text)
 
 async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
